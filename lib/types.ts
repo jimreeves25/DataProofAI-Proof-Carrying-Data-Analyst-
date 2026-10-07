@@ -78,7 +78,7 @@ export interface AnalysisAssumptions {
 }
 
 export interface CalculationResult {
-  value: number | { label: string; value: number }[];
+  value: number | { label: string; value: number }[] | Record<string, string | number | null>[];
   code: string;
   method: string;
   rowsUsed: number;

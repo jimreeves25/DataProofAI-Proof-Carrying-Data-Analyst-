@@ -113,52 +113,107 @@ def _generate_heuristic_plan(
             required_columns=["revenue_usd", "expense_usd", "product"],
         )
 
-    # Single-table analysis
-    all_num_cols = []
-    for fp in profile.files:
-        for cp in fp.column_profiles:
-            if cp.dtype in ("float64", "int64") or cp.numeric_mean is not None:
-                all_num_cols.append((fp.filename, cp.name))
+    # Use first available file
+    fp = profile.files[0]
+    fname = fp.filename
 
-    target_file = None
+    # Collect column info
+    num_cols = [
+        cp for cp in fp.column_profiles
+        if cp.dtype in ("float64", "int64") or cp.numeric_mean is not None
+    ]
+    str_cols = [cp for cp in fp.column_profiles if cp.dtype == "object"]
+
+    # Detect operation type
+    is_avg = any(w in q_lower for w in ("average", "mean", "avg"))
+    is_count = any(w in q_lower for w in ("how many", "count", "number of"))
+    is_max = any(w in q_lower for w in ("maximum", "highest", "largest", "max", "most", "top"))
+    is_min = any(w in q_lower for w in ("minimum", "lowest", "smallest", "min", "least"))
+    is_pct = any(w in q_lower for w in ("percent", "percentage", "ratio", "proportion"))
+
+    # Binary/categorical pairs
+    BINARY_PAIRS = [
+        ("true", "false"), ("yes", "no"), ("pass", "fail"),
+        ("passed", "failed"), ("positive", "negative"),
+        ("approved", "rejected"), ("valid", "invalid"),
+        ("success", "failure"), ("completed", "failed"),
+        ("active", "inactive"), ("open", "closed"),
+    ]
+
+    filter_col = None
+    filter_val = None
+    for pos, neg in BINARY_PAIRS:
+        if pos in q_lower or neg in q_lower:
+            matched = pos if pos in q_lower else neg
+            for cp in str_cols:
+                sv_lower = [str(v).lower() for v in cp.sample_values]
+                if any(matched in sv for sv in sv_lower) or any(
+                    pos in sv or neg in sv for sv in sv_lower
+                ):
+                    filter_col = cp.name
+                    filter_val = matched
+                    break
+        if filter_col:
+            break
+
+    # Also check actual sample values
+    if not filter_col:
+        for cp in str_cols:
+            for sv in cp.sample_values:
+                sv_str = str(sv).lower()
+                if sv_str and sv_str in q_lower and len(sv_str) > 2:
+                    filter_col = cp.name
+                    filter_val = sv_str
+                    break
+            if filter_col:
+                break
+
+    # Find target numeric column
     target_col = None
+    for nc in num_cols:
+        if nc.name.lower() in q_lower:
+            target_col = nc.name
+            break
+    if not target_col and num_cols:
+        target_col = num_cols[0].name
 
-    if "revenue" in q_lower:
-        for fname, col in all_num_cols:
-            if "rev" in col.lower():
-                target_file, target_col = fname, col
-                break
-    elif "unit" in q_lower or "sold" in q_lower:
-        for fname, col in all_num_cols:
-            if "unit" in col.lower():
-                target_file, target_col = fname, col
-                break
-    elif "expense" in q_lower:
-        for fname, col in all_num_cols:
-            if "exp" in col.lower():
-                target_file, target_col = fname, col
-                break
+    # Build operations list
+    ops = []
+    required = []
 
-    if not target_col and all_num_cols:
-        target_file, target_col = all_num_cols[0]
+    if fp.duplicate_rows > 0:
+        ops.append(f"deduplicate {fname}")
 
-    if target_col and target_file:
-        fp = file_map[target_file]
-        is_avg = any(w in q_lower for w in ("average", "mean", "avg"))
-        op_name = "mean" if is_avg else "sum"
-        has_dupes = fp.duplicate_rows > 0
-        ops = []
-        if has_dupes:
-            ops.append(f"deduplicate {target_file}")
-        ops.append(f"calculate {op_name} of {target_col}")
-        return AnalysisPlan(
-            answerable=True,
-            datasets=[target_file],
-            operations=ops,
-            required_columns=[target_col],
-        )
+    if is_pct and filter_col:
+        ops.append(f"calculate percentage where {filter_col} = '{filter_val}'")
+        required = [filter_col]
+    elif (is_count or not target_col) and filter_col:
+        ops.append(f"count rows where {filter_col} = '{filter_val}'")
+        required = [filter_col]
+    elif is_count:
+        ops.append("count total rows")
+        required = []
+    elif is_avg and target_col:
+        ops.append(f"calculate mean of {target_col}")
+        required = [target_col]
+    elif is_max and target_col:
+        ops.append(f"find maximum of {target_col}")
+        required = [target_col]
+    elif is_min and target_col:
+        ops.append(f"find minimum of {target_col}")
+        required = [target_col]
+    elif target_col:
+        ops.append(f"calculate sum of {target_col}")
+        required = [target_col]
+    else:
+        ops.append("count total rows")
 
-    return None
+    return AnalysisPlan(
+        answerable=True,
+        datasets=[fname],
+        operations=ops,
+        required_columns=required,
+    )
 
 
 def plan_analysis(

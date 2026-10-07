@@ -128,33 +128,166 @@ def _generate_heuristic_code(
     # Single dataset case
     fname = plan.datasets[0] if plan.datasets else profile.files[0].filename
     fp = file_map.get(fname, profile.files[0])
-    target_col = plan.required_columns[0] if plan.required_columns else (
-        "revenue_usd" if "revenue_usd" in fp.column_names else fp.column_names[-1]
-    )
 
-    is_avg = any("mean" in op.lower() or "average" in op.lower() for op in plan.operations) or any(w in q_lower for w in ("average", "mean", "avg"))
+    # Detect operation type from question
+    is_avg = any(w in q_lower for w in ("average", "mean", "avg"))
+    is_count = any(w in q_lower for w in ("how many", "count", "number of"))
+    is_max = any(w in q_lower for w in ("maximum", "highest", "largest", "max", "most", "top"))
+    is_min = any(w in q_lower for w in ("minimum", "lowest", "smallest", "min", "least"))
+    is_pct = any(w in q_lower for w in ("percent", "percentage", "ratio", "proportion", "share"))
     has_dupes = fp.duplicate_rows > 0 or any("deduplicate" in op.lower() for op in plan.operations)
 
-    code_lines = [
-        "import pandas as pd",
-        f"df = pd.read_csv('{fname}')",
+    # Detect all string (categorical) columns and numeric columns
+    str_cols = [cp.name for cp in fp.column_profiles if cp.dtype == "object"]
+    num_cols = [
+        cp.name for cp in fp.column_profiles
+        if cp.dtype in ("float64", "int64") or cp.numeric_mean is not None
     ]
+
+    # --- Categorical value detection ---
+    # Binary/categorical pairs to look for in the question
+    BINARY_PAIRS = [
+        ("true", "false"), ("yes", "no"), ("pass", "fail"),
+        ("passed", "failed"), ("positive", "negative"),
+        ("approved", "rejected"), ("valid", "invalid"),
+        ("success", "failure"), ("completed", "failed"),
+        ("active", "inactive"), ("open", "closed"),
+    ]
+
+    # Check if question mentions a specific categorical value
+    filter_col: str | None = None
+    filter_val: str | None = None
+
+    for pos, neg in BINARY_PAIRS:
+        if pos in q_lower or neg in q_lower:
+            matched_word = pos if pos in q_lower else neg
+            # Find which string column likely holds this value
+            for cp in fp.column_profiles:
+                if cp.dtype == "object":
+                    sv_lower = [str(v).lower() for v in cp.sample_values]
+                    if any(matched_word in sv for sv in sv_lower) or any(
+                        pos in sv or neg in sv for sv in sv_lower
+                    ):
+                        filter_col = cp.name
+                        filter_val = matched_word
+                        break
+            if filter_col:
+                break
+
+    # Also check if any actual column value appears in the question
+    if not filter_col:
+        for cp in fp.column_profiles:
+            if cp.dtype == "object":
+                for sv in cp.sample_values:
+                    sv_str = str(sv).lower()
+                    if sv_str and sv_str in q_lower and len(sv_str) > 2:
+                        filter_col = cp.name
+                        filter_val = sv_str
+                        break
+            if filter_col:
+                break
+
+    # Determine target numeric column
+    target_col: str | None = None
+    if plan.required_columns:
+        for rc in plan.required_columns:
+            for cp in fp.column_profiles:
+                if cp.name.lower() == rc.lower() and (cp.dtype in ("float64", "int64") or cp.numeric_mean is not None):
+                    target_col = cp.name
+                    break
+            if target_col:
+                break
+    if not target_col and num_cols:
+        # Pick numeric col mentioned in question, else first
+        for nc in num_cols:
+            if nc.lower() in q_lower:
+                target_col = nc
+                break
+        if not target_col:
+            target_col = num_cols[0]
+
+    code_lines = ["import pandas as pd", f"df = pd.read_csv('{fname}')"]
     if has_dupes:
-        code_lines.append("# Deduplicate rows")
-        code_lines.append("df = df.drop_duplicates()")
+        code_lines += ["# Deduplicate rows", "df = df.drop_duplicates()"]
+
+    # --- PERCENTAGE of a categorical value ---
+    if is_pct and filter_col and filter_val:
+        code_lines += [
+            f"# Count matching rows and total rows",
+            f"total = len(df)",
+            f"matching = (df['{filter_col}'].astype(str).str.lower() == '{filter_val}').sum()",
+            f"result = round((matching / total * 100), 2) if total > 0 else 0",
+            f"print(f'{{result}}%')",
+        ]
+        return GeneratedCode(
+            code="\n".join(code_lines) + "\n",
+            expected_output_type="percentage",
+            calculation_description=f"Percentage of rows where {filter_col} = '{filter_val}'",
+            datasets_used=[fname],
+        )
+
+    # --- COUNT of a categorical value ---
+    if (is_count or not target_col) and filter_col and filter_val:
+        code_lines += [
+            f"# Count rows matching the condition",
+            f"result = (df['{filter_col}'].astype(str).str.lower() == '{filter_val}').sum()",
+            f"print(result)",
+        ]
+        return GeneratedCode(
+            code="\n".join(code_lines) + "\n",
+            expected_output_type="number",
+            calculation_description=f"Count of rows where {filter_col} = '{filter_val}'",
+            datasets_used=[fname],
+        )
+
+    # --- TOTAL ROW COUNT ---
+    if is_count and not filter_col and not target_col:
+        code_lines += ["result = len(df)", "print(result)"]
+        return GeneratedCode(
+            code="\n".join(code_lines) + "\n",
+            expected_output_type="number",
+            calculation_description=f"Total row count of {fname}",
+            datasets_used=[fname],
+        )
+
+    # --- Numeric operations with optional filter ---
+    if not target_col:
+        code_lines += ["print(len(df))"]
+        return GeneratedCode(
+            code="\n".join(code_lines) + "\n",
+            expected_output_type="number",
+            calculation_description=f"Row count of {fname} (no numeric column found)",
+            datasets_used=[fname],
+        )
+
+    # Apply filter if present
+    if filter_col and filter_val:
+        code_lines.append(f"df = df[df['{filter_col}'].astype(str).str.lower() == '{filter_val}']")
 
     if is_avg:
-        code_lines.append(f"result = round(df['{target_col}'].mean(), 2)")
-        code_lines.append("print(result)")
-        desc = f"Calculate average of {target_col} from {fname}"
+        code_lines += [f"result = round(df['{target_col}'].dropna().mean(), 2)", "print(result)"]
+        desc = f"Average of {target_col} from {fname}"
+        out_type = "number"
+    elif is_max:
+        code_lines += [f"result = df['{target_col}'].dropna().max()", "print(result)"]
+        desc = f"Maximum of {target_col} from {fname}"
+        out_type = "number"
+    elif is_min:
+        code_lines += [f"result = df['{target_col}'].dropna().min()", "print(result)"]
+        desc = f"Minimum of {target_col} from {fname}"
+        out_type = "number"
+    elif is_count:
+        code_lines += [f"result = df['{target_col}'].dropna().count()", "print(result)"]
+        desc = f"Count of non-null {target_col} from {fname}"
+        out_type = "number"
     else:
-        code_lines.append(f"result = round(df['{target_col}'].sum(), 2)")
-        code_lines.append("print(result)")
-        desc = f"Calculate sum of {target_col} from {fname}"
+        code_lines += [f"result = round(df['{target_col}'].dropna().sum(), 2)", "print(result)"]
+        desc = f"Sum of {target_col} from {fname}"
+        out_type = "number"
 
     return GeneratedCode(
         code="\n".join(code_lines) + "\n",
-        expected_output_type="number",
+        expected_output_type=out_type,
         calculation_description=desc,
         datasets_used=[fname],
     )

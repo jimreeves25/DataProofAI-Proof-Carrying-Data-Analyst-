@@ -23,6 +23,7 @@ __pycache__/
 /dist/
 frontend/dist/
 *.tsbuildinfo
+next-env.d.ts
 
 # Local environment files
 .env

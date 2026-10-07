@@ -16,6 +16,8 @@ import tempfile
 from pathlib import Path
 from typing import List
 
+from typing import Optional
+
 from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, FileResponse
 

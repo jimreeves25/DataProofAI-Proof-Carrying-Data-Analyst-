@@ -292,6 +292,10 @@ function NewAnalysisContent() {
                     'Compare revenue by customer type',
                     'What is the average order value?',
                     'Show revenue trend over time',
+                    'What is the total units sold by product?',
+                    'What is the average unit price?',
+                    'What are the recently added products?',
+                    'Which laptop had the highest revenue?',
                   ].map((q) => (
                     <button
                       key={q}
@@ -302,6 +306,20 @@ function NewAnalysisContent() {
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {selectedDataset && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs font-semibold text-amber-800">⚠ Questions that trigger a verification error</p>
+                <p className="mt-1 text-xs text-amber-700">
+                  Asking something irrelevant to the dataset will result in a <strong>CANNOT VERIFY</strong> error. For example, on the sales dataset try:
+                </p>
+                <ul className="mt-1.5 list-disc pl-4 text-xs text-amber-700 space-y-0.5">
+                  <li><span className="font-mono">What is the average employee salary?</span> — no salary column exists</li>
+                  <li><span className="font-mono">What is the total tax collected?</span> — no tax column exists</li>
+                </ul>
+                <p className="mt-1.5 text-xs text-amber-600">The engine finds no matching numeric column, zero rows are used, and the result cannot be verified.</p>
               </div>
             )}
 
@@ -522,13 +540,13 @@ function NewAnalysisContent() {
                   </div>
                   <div>
                     <h2 className="text-xl font-bold text-amber-900">CANNOT VERIFY</h2>
-                    <p className="text-sm text-amber-700">The data does not support this calculation.</p>
+                    <p className="text-sm text-amber-700">Your question appears irrelevant to the selected dataset.</p>
                   </div>
                 </div>
                 <div className="mt-4 rounded-lg bg-white p-4">
                   <p className="text-sm text-slate-700">
                     {verification.primaryResult.rowsUsed === 0
-                      ? 'No rows matched the filters. Check your question and try again.'
+                      ? 'The question does not match any column in this dataset. Try asking something relevant to the available data.'
                       : verification.matchDetails}
                   </p>
                 </div>
@@ -549,6 +567,35 @@ function NewAnalysisContent() {
                 <div className="mt-4 rounded-lg bg-white p-4">
                   <p className="text-sm text-slate-700">{verification.matchDetails}</p>
                 </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* LIST detail table */}
+          {contract.aggregation === 'LIST' && Array.isArray(verification.primaryResult.value) && (verification.primaryResult.value as Record<string, string | number | null>[]).length > 0 && !('label' in (verification.primaryResult.value as Record<string, unknown>[])[0]) && (
+            <Card className="border-slate-200">
+              <CardHeader>
+                <CardTitle className="text-sm">Product Details</CardTitle>
+              </CardHeader>
+              <CardContent className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200">
+                      {Object.keys((verification.primaryResult.value as Record<string, string | number | null>[])[0]).map((col) => (
+                        <th key={col} className="py-2 pr-4 text-left font-semibold text-slate-500 capitalize">{col.replace(/_/g, ' ')}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(verification.primaryResult.value as Record<string, string | number | null>[]).map((row, i) => (
+                      <tr key={i} className="border-b border-slate-100 hover:bg-slate-50">
+                        {Object.values(row).map((val, j) => (
+                          <td key={j} className="py-2 pr-4 text-slate-800">{val ?? '—'}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </CardContent>
             </Card>
           )}

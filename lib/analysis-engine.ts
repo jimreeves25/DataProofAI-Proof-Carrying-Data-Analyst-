@@ -13,22 +13,26 @@ interface DatasetData {
   name: string;
 }
 
-const AGGREGATIONS = ['sum', 'average', 'mean', 'count', 'max', 'minimum', 'min', 'maximum', 'median'];
-const METRIC_KEYWORDS: Record<string, string> = {
-  revenue: 'Revenue',
-  sales: 'Revenue',
-  profit: 'Revenue',
-  income: 'Revenue',
-  quantity: 'Quantity',
-  qty: 'Quantity',
-  count: 'Count',
-  orders: 'Count',
-  price: 'UnitPrice',
-  'unit price': 'UnitPrice',
-  'average order value': 'Revenue',
-  aov: 'Revenue',
-};
+// ---------------------------------------------------------------------------
+// Binary/categorical value pairs the engine recognises
+// ---------------------------------------------------------------------------
+const BINARY_PAIRS: [string, string][] = [
+  ['true', 'false'],
+  ['yes', 'no'],
+  ['pass', 'fail'],
+  ['passed', 'failed'],
+  ['positive', 'negative'],
+  ['approved', 'rejected'],
+  ['valid', 'invalid'],
+  ['success', 'failure'],
+  ['completed', 'failed'],
+  ['active', 'inactive'],
+  ['open', 'closed'],
+];
 
+// ---------------------------------------------------------------------------
+// Column finder (case-insensitive, partial match)
+// ---------------------------------------------------------------------------
 function findColumn(columns: DatasetColumn[], name: string): DatasetColumn | undefined {
   const lower = name.toLowerCase();
   return columns.find(
@@ -40,31 +44,90 @@ function findColumn(columns: DatasetColumn[], name: string): DatasetColumn | und
   );
 }
 
-function findMetricColumn(question: string, columns: DatasetColumn[]): string | null {
-  const lower = question.toLowerCase();
-  // Check for multi-word metrics first
-  const multiWord = ['average order value', 'aov', 'unit price'];
-  for (const kw of multiWord) {
-    if (lower.includes(kw)) {
-      const mapped = METRIC_KEYWORDS[kw];
-      const col = findColumn(columns, mapped);
-      if (col) return col.name;
+// ---------------------------------------------------------------------------
+// Get all unique raw string values from a column across ALL rows
+// (samples may be coerced to 0/1 for booleans — we need the real strings)
+// ---------------------------------------------------------------------------
+function getColumnUniqueValues(
+  colName: string,
+  rows: Record<string, number | string | null>[]
+): string[] {
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const v = row[colName];
+    if (v !== null && v !== undefined && v !== '') {
+      seen.add(String(v).toLowerCase().trim());
     }
   }
-  for (const [keyword, mapped] of Object.entries(METRIC_KEYWORDS)) {
-    if (lower.includes(keyword)) {
-      const col = findColumn(columns, mapped);
-      if (col) return col.name;
-    }
-  }
-  // Find first numeric column
-  const numericCol = columns.find((c) => c.type === 'number' || c.type === 'currency');
-  return numericCol?.name || null;
+  return Array.from(seen);
 }
 
+// ---------------------------------------------------------------------------
+// Detect if the question is asking about a specific categorical value
+// Returns { column, value, rawValue } or null
+// rawValue is the actual value as it appears in the data
+// ---------------------------------------------------------------------------
+function detectCategoricalIntent(
+  question: string,
+  columns: DatasetColumn[],
+  rows: Record<string, number | string | null>[]
+): { column: string; value: string; rawValue: string } | null {
+  const lower = question.toLowerCase();
+  const stringCols = columns.filter((c) => c.type === 'string' || c.type === 'boolean');
+
+  // 1. Check known binary pairs against actual row data
+  for (const [pos, neg] of BINARY_PAIRS) {
+    const matched = lower.includes(pos) ? pos : lower.includes(neg) ? neg : null;
+    if (!matched) continue;
+
+    for (const col of stringCols) {
+      const uniqueVals = getColumnUniqueValues(col.name, rows);
+      // Find the actual value in the data that matches the keyword
+      const rawMatch = uniqueVals.find((v) => v === matched || v.startsWith(matched));
+      if (rawMatch) {
+        return { column: col.name, value: matched, rawValue: rawMatch };
+      }
+      // If column has both pos and neg values, it's the right column even if sample didn't match
+      const hasPos = uniqueVals.some((v) => v === pos || v.startsWith(pos));
+      const hasNeg = uniqueVals.some((v) => v === neg || v.startsWith(neg));
+      if (hasPos || hasNeg) {
+        return { column: col.name, value: matched, rawValue: matched };
+      }
+    }
+
+    // Also check boolean columns (stored as 0/1) — map true→1, false→0
+    const boolCols = columns.filter((c) => c.type === 'boolean');
+    for (const col of boolCols) {
+      const numericVal = matched === 'true' || matched === 'yes' || matched === 'pass' || matched === 'passed' || matched === 'positive' || matched === 'approved' || matched === 'valid' || matched === 'success' || matched === 'completed' || matched === 'active' || matched === 'open' ? '1' : '0';
+      return { column: col.name, value: numericVal, rawValue: numericVal };
+    }
+  }
+
+  // 2. Check actual unique values from all rows against the question
+  for (const col of stringCols) {
+    const uniqueVals = getColumnUniqueValues(col.name, rows);
+    for (const uv of uniqueVals) {
+      if (uv.length > 1 && lower.includes(uv)) {
+        return { column: col.name, value: uv, rawValue: uv };
+      }
+    }
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Detect aggregation intent
+// ---------------------------------------------------------------------------
 function findAggregation(question: string): string {
   const lower = question.toLowerCase();
+  if (
+    lower.includes('recently added') || lower.includes('what are the') ||
+    lower.includes('list') || lower.includes('show me all') ||
+    lower.includes('what products') || lower.includes('which products are')
+  ) return 'LIST';
   if (lower.includes('average') || lower.includes('mean') || lower.includes('avg')) return 'AVG';
+  if (lower.includes('percent') || lower.includes('percentage') || lower.includes('ratio') || lower.includes('proportion')) return 'PCT';
   if (lower.includes('count') || lower.includes('how many') || lower.includes('number of')) return 'COUNT';
   if (lower.includes('max') || lower.includes('maximum') || lower.includes('highest') || lower.includes('largest') || lower.includes('most') || lower.includes('top')) return 'MAX';
   if (lower.includes('min') || lower.includes('minimum') || lower.includes('lowest') || lower.includes('smallest') || lower.includes('least')) return 'MIN';
@@ -72,11 +135,63 @@ function findAggregation(question: string): string {
   return 'SUM';
 }
 
+// ---------------------------------------------------------------------------
+// Find the numeric column the question is about
+// ---------------------------------------------------------------------------
+function findMetricColumn(
+  question: string,
+  columns: DatasetColumn[],
+  aggregation: string,
+  rows: Record<string, number | string | null>[]
+): string | null {
+  const lower = question.toLowerCase();
+  const numericCols = columns.filter((c) => c.type === 'number' || c.type === 'currency');
+
+  // If it's a pure count/percentage of categorical values, no numeric column needed
+  if (aggregation === 'COUNT' || aggregation === 'PCT') {
+    const catIntent = detectCategoricalIntent(question, columns, rows);
+    if (catIntent) return null;
+  }
+
+  // Try to match a column name mentioned in the question
+  for (const col of numericCols) {
+    if (lower.includes(col.name.toLowerCase())) return col.name;
+  }
+
+  // Keyword → column name mapping
+  const keywordMap: Record<string, string[]> = {
+    revenue: ['revenue', 'sales', 'income', 'turnover'],
+    amount: ['amount', 'total', 'value'],
+    quantity: ['quantity', 'qty', 'units'],
+    price: ['price', 'unitprice', 'rate', 'cost'],
+    profit: ['profit', 'margin', 'gain'],
+    expense: ['expense', 'cost', 'spend'],
+  };
+  for (const col of numericCols) {
+    const colLower = col.name.toLowerCase();
+    for (const aliases of Object.values(keywordMap)) {
+      if (aliases.some((a) => colLower.includes(a)) && aliases.some((a) => lower.includes(a))) {
+        return col.name;
+      }
+    }
+  }
+
+  // For SUM/AVG/MAX/MIN — fall back to first numeric column
+  if (['SUM', 'AVG', 'MAX', 'MIN', 'MEDIAN'].includes(aggregation) && numericCols.length > 0) {
+    return numericCols[0].name;
+  }
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Find GROUP BY column
+// ---------------------------------------------------------------------------
 function findGroupBy(question: string, columns: DatasetColumn[]): string | null {
   const lower = question.toLowerCase();
-  const dimensionKeywords = ['by', 'per', 'for each', 'across', 'among'];
   const stringCols = columns.filter((c) => c.type === 'string');
 
+  const dimensionKeywords = ['by', 'per', 'for each', 'across', 'among'];
   for (const kw of dimensionKeywords) {
     const idx = lower.indexOf(kw);
     if (idx >= 0) {
@@ -87,7 +202,6 @@ function findGroupBy(question: string, columns: DatasetColumn[]): string | null 
     }
   }
 
-  // Check for product/region/category mentioned directly
   const directMatches: Record<string, string[]> = {
     product: ['Product', 'Item', 'Name'],
     region: ['Region', 'City', 'State', 'Location'],
@@ -96,7 +210,6 @@ function findGroupBy(question: string, columns: DatasetColumn[]): string | null 
     customer: ['CustomerType', 'Customer'],
     month: ['Date', 'Month'],
   };
-
   for (const [keyword, colNames] of Object.entries(directMatches)) {
     if (lower.includes(`by ${keyword}`) || lower.includes(`per ${keyword}`) || lower.includes(`each ${keyword}`)) {
       for (const cn of colNames) {
@@ -106,7 +219,6 @@ function findGroupBy(question: string, columns: DatasetColumn[]): string | null 
     }
   }
 
-  // "which product" pattern
   if (lower.includes('which ')) {
     for (const col of stringCols) {
       if (lower.includes(col.name.toLowerCase())) return col.name;
@@ -116,9 +228,13 @@ function findGroupBy(question: string, columns: DatasetColumn[]): string | null 
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Find filters — only add filters that are clearly supported by actual data
+// ---------------------------------------------------------------------------
 function findFilters(
   question: string,
-  columns: DatasetColumn[]
+  columns: DatasetColumn[],
+  rows: Record<string, number | string | null>[]
 ): { column: string; operator: string; value: string }[] {
   const filters: { column: string; operator: string; value: string }[] = [];
   const lower = question.toLowerCase();
@@ -127,88 +243,84 @@ function findFilters(
   const yearMatch = lower.match(/in (20\d{2})/);
   if (yearMatch) {
     const dateCol = columns.find((c) => c.type === 'date');
-    if (dateCol) {
-      filters.push({ column: dateCol.name, operator: 'year', value: yearMatch[1] });
-    }
+    if (dateCol) filters.push({ column: dateCol.name, operator: 'year', value: yearMatch[1] });
   }
 
   // Date range filters
   const rangeMatch = lower.match(/between (\d{4}-\d{2}-\d{2}).*(\d{4}-\d{2}-\d{2})/);
   if (rangeMatch) {
     const dateCol = columns.find((c) => c.type === 'date');
-    if (dateCol) {
-      filters.push({ column: dateCol.name, operator: 'range', value: `${rangeMatch[1]},${rangeMatch[2]}` });
+    if (dateCol) filters.push({ column: dateCol.name, operator: 'range', value: `${rangeMatch[1]},${rangeMatch[2]}` });
+  }
+
+  // Match actual unique values from rows against the question
+  const stringCols = columns.filter((c) => c.type === 'string');
+  for (const col of stringCols) {
+    if (filters.some((f) => f.column === col.name)) continue;
+    const uniqueVals = getColumnUniqueValues(col.name, rows);
+    for (const uv of uniqueVals) {
+      if (uv.length > 1 && lower.includes(uv)) {
+        filters.push({ column: col.name, operator: '=', value: uv });
+        break;
+      }
     }
   }
 
-  // "in <Region>" or "for <Region>"
-  const stringCols = columns.filter((c) => c.type === 'string');
+  // Fallback: column-name-based patterns
   for (const col of stringCols) {
+    if (filters.some((f) => f.column === col.name)) continue;
     const patterns = [
       new RegExp(`in ${col.name.toLowerCase()} (\\w+)`, 'i'),
       new RegExp(`for ${col.name.toLowerCase()} (\\w+)`, 'i'),
       new RegExp(`${col.name.toLowerCase()} is (\\w+)`, 'i'),
       new RegExp(`where ${col.name.toLowerCase()} (\\w+)`, 'i'),
-      new RegExp(`only ${col.name.toLowerCase()}`, 'i'),
     ];
     for (const pat of patterns) {
       const m = lower.match(pat);
-      if (m && m[1]) {
-        // Verify the value exists in the column
-        const exists = columns.find((c) => c.name === col.name);
-        if (exists) {
-          const colValues = new Set(
-            // We'll check from the column samples + uniqueness
-            exists.samples.map((s) => String(s).toLowerCase())
-          );
-          if (colValues.has(m[1].toLowerCase()) || colValues.size === 0) {
-            filters.push({ column: col.name, operator: '=', value: m[1] });
-          }
-        }
+      if (m?.[1]) {
+        filters.push({ column: col.name, operator: '=', value: m[1] });
+        break;
       }
     }
   }
 
-  // Customer type filters
+  // CustomerType shortcuts
   if (lower.includes('returning')) {
     const col = findColumn(columns, 'CustomerType') || findColumn(columns, 'Customer');
-    if (col) filters.push({ column: col.name, operator: '=', value: 'Returning' });
+    if (col && !filters.some((f) => f.column === col.name))
+      filters.push({ column: col.name, operator: '=', value: 'Returning' });
   }
   if (lower.includes('new customer')) {
     const col = findColumn(columns, 'CustomerType') || findColumn(columns, 'Customer');
-    if (col) filters.push({ column: col.name, operator: '=', value: 'New' });
+    if (col && !filters.some((f) => f.column === col.name))
+      filters.push({ column: col.name, operator: '=', value: 'New' });
   }
 
   return filters;
 }
 
+// ---------------------------------------------------------------------------
+// Ambiguity detection
+// ---------------------------------------------------------------------------
 function detectAmbiguity(
   question: string,
   metricColumn: string | null,
-  groupBy: string | null,
-  columns: DatasetColumn[]
+  aggregation: string,
+  columns: DatasetColumn[],
+  rows: Record<string, number | string | null>[]
 ): string {
-  if (!metricColumn) {
+  if (aggregation === 'LIST') return 'None';
+  const catIntent = detectCategoricalIntent(question, columns, rows);
+  if (aggregation === 'COUNT' || aggregation === 'PCT') {
+    if (catIntent || columns.length > 0) return 'None';
+  }
+  if (!metricColumn && !catIntent) {
     return 'No numeric column found to calculate. Please specify a metric.';
   }
-  const lower = question.toLowerCase();
-
-  // Multiple dimension references
-  const stringCols = columns.filter((c) => c.type === 'string');
-  let dimensionRefs = 0;
-  for (const col of stringCols) {
-    if (lower.includes(col.name.toLowerCase())) dimensionRefs++;
-  }
-  if (dimensionRefs > 2 && !groupBy) {
-    return 'Multiple dimensions mentioned. Please specify which to group by.';
-  }
-
-  // Currency conflict check
   const currencyCols = columns.filter((c) => c.type === 'currency');
   if (currencyCols.length > 1) {
     return 'Multiple currency columns detected. Confirm which currency to use.';
   }
-
   return 'None';
 }
 
@@ -216,17 +328,29 @@ export function generateAnalysisContract(
   question: string,
   dataset: DatasetData
 ): AnalysisContract {
-  const metricColumn = findMetricColumn(question, dataset.columns);
   const aggregation = findAggregation(question);
   const groupBy = findGroupBy(question, dataset.columns);
-  const filters = findFilters(question, dataset.columns);
-  const ambiguity = detectAmbiguity(question, metricColumn, groupBy, dataset.columns);
+  const filters = findFilters(question, dataset.columns, dataset.rows);
+  const catIntent = detectCategoricalIntent(question, dataset.columns, dataset.rows);
+  const metricColumn = findMetricColumn(question, dataset.columns, aggregation, dataset.rows);
+  const ambiguity = detectAmbiguity(question, metricColumn, aggregation, dataset.columns, dataset.rows);
 
-  let metric = metricColumn || 'Unknown';
-  if (metricColumn) {
-    if (aggregation === 'COUNT' && question.toLowerCase().includes('how many')) {
-      metric = 'Count';
+  let metric: string;
+  let targetColumn: string | undefined;
+
+  if (catIntent && (aggregation === 'COUNT' || aggregation === 'PCT')) {
+    metric = `${aggregation === 'PCT' ? 'Percentage' : 'Count'} of ${catIntent.value} in ${catIntent.column}`;
+    targetColumn = undefined;
+    // Add the categorical filter using the rawValue (actual data value)
+    if (!filters.some((f) => f.column === catIntent.column)) {
+      filters.push({ column: catIntent.column, operator: '=', value: catIntent.rawValue });
     }
+  } else if (metricColumn) {
+    metric = metricColumn;
+    targetColumn = metricColumn;
+  } else {
+    metric = 'RowCount';
+    targetColumn = undefined;
   }
 
   return {
@@ -237,7 +361,7 @@ export function generateAnalysisContract(
     groupBy: groupBy || undefined,
     dimension: groupBy || undefined,
     ambiguity,
-    targetColumn: metricColumn || undefined,
+    targetColumn,
   };
 }
 
@@ -248,25 +372,36 @@ export function generateAssumptions(
   const currencyCol = dataset.columns.find((c) => c.type === 'currency');
   const dateCol = dataset.columns.find((c) => c.type === 'date');
 
+  // Only claim currency if the target column is actually a currency column
+  const targetIsCurrency = contract.targetColumn
+    ? dataset.columns.find((c) => c.name === contract.targetColumn)?.type === 'currency'
+    : false;
+
   const excludedRecords: string[] = [];
   if (contract.filters.length === 0) {
     excludedRecords.push('No filters applied — all rows included');
+  } else {
+    contract.filters.forEach((f) => excludedRecords.push(`Filter: ${f.column} ${f.operator} '${f.value}'`));
+  }
+
+  let formula: string;
+  if (contract.aggregation === 'LIST') {
+    formula = `SELECT * FROM ${dataset.name} ORDER BY date DESC LIMIT 10`;
+  } else if (contract.aggregation === 'PCT') {
+    formula = `COUNT(${contract.metric}) / COUNT(*) × 100`;
+  } else if (contract.aggregation === 'COUNT') {
+    formula = contract.targetColumn ? `COUNT(${contract.targetColumn})` : `COUNT(*)`;
+  } else {
+    formula = `${contract.aggregation}(${contract.metric})`;
   }
 
   return {
-    currency: currencyCol ? 'INR (₹)' : 'Not specified',
+    currency: targetIsCurrency ? 'INR (₹)' : 'Not applicable',
     dateInterpretation: dateCol ? 'YYYY-MM-DD format' : 'No date columns',
     excludedRecords,
     aggregation: contract.aggregation,
     missingValueTreatment: 'Rows with null values in the target column are excluded',
-    formula:
-      contract.aggregation === 'SUM'
-        ? `${contract.aggregation}(${contract.metric})`
-        : contract.aggregation === 'AVG'
-        ? `${contract.aggregation}(${contract.metric})`
-        : contract.aggregation === 'COUNT'
-        ? `COUNT(rows)`
-        : `${contract.aggregation}(${contract.metric})`,
+    formula,
   };
 }
 
@@ -278,9 +413,10 @@ function applyFilters(
   return rows.filter((row) => {
     return filters.every((f) => {
       const val = row[f.column];
-      if (val === null || val === '') return false;
+      if (val === null || val === undefined || val === '') return false;
       if (f.operator === '=') {
-        return String(val).toLowerCase() === f.value.toLowerCase();
+        // Compare as lowercase strings — handles both string and numeric stored values
+        return String(val).toLowerCase().trim() === f.value.toLowerCase().trim();
       }
       if (f.operator === 'year') {
         const date = new Date(String(val));
@@ -304,7 +440,67 @@ function primaryCalculation(
   const filteredRows = applyFilters(dataset.rows, contract.filters);
   const targetCol = contract.targetColumn || '';
   const groupBy = contract.groupBy;
+  const agg = contract.aggregation;
 
+  // --- LIST: return raw rows sorted by date desc ---
+  if (agg === 'LIST') {
+    const dateCol = dataset.columns.find((c) => c.type === 'date')?.name;
+    const sorted = dateCol
+      ? [...filteredRows].sort((a, b) => String(b[dateCol]).localeCompare(String(a[dateCol])))
+      : filteredRows;
+    const top10 = sorted.slice(0, 10);
+    const code =
+      `-- Primary SQL-style calculation\n` +
+      `SELECT * FROM ${dataset.name}\n` +
+      (dateCol ? `ORDER BY ${dateCol} DESC\n` : '') +
+      `LIMIT 10;`;
+    return {
+      value: top10,
+      code,
+      method: 'SQL Row Listing',
+      rowsUsed: filteredRows.length,
+      details: { aggregation: 'LIST', returned: top10.length },
+    };
+  }
+
+  // --- PERCENTAGE of filtered rows vs total ---
+  if (agg === 'PCT') {
+    const total = dataset.rows.length;
+    const matching = filteredRows.length;
+    const pct = total > 0 ? (matching / total) * 100 : 0;
+    const filterDesc = contract.filters.map((f) => `${f.column} = '${f.value}'`).join(' AND ');
+    const code =
+      `-- Primary SQL-style calculation\n` +
+      `SELECT COUNT(*) * 100.0 / (SELECT COUNT(*) FROM ${dataset.name}) AS percentage\n` +
+      `FROM ${dataset.name}\n` +
+      (filterDesc ? `WHERE ${filterDesc};` : ';');
+    return {
+      value: Math.round(pct * 10000) / 10000,
+      code,
+      method: 'SQL Percentage Calculation',
+      rowsUsed: total,
+      details: { matching, total, aggregation: 'PCT' },
+    };
+  }
+
+  // --- COUNT of filtered rows (categorical filter count) ---
+  if (agg === 'COUNT' && !targetCol) {
+    const count = filteredRows.length;
+    const filterDesc = contract.filters.map((f) => `${f.column} = '${f.value}'`).join(' AND ');
+    const code =
+      `-- Primary SQL-style calculation\n` +
+      `SELECT COUNT(*) FROM ${dataset.name}\n` +
+      (filterDesc ? `WHERE ${filterDesc};` : ';');
+    return {
+      value: count,
+      code,
+      method: 'SQL Iterative Aggregation',
+      rowsUsed: filteredRows.length,
+      details: { aggregation: 'COUNT' },
+    };
+  }
+
+  // --- GROUP BY numeric aggregation ---
   if (groupBy) {
     const groups = new Map<string, number[]>();
     for (const row of filteredRows) {
@@ -317,17 +513,16 @@ function primaryCalculation(
     }
 
     let code = `-- Primary SQL-style calculation\n`;
-    code += `SELECT ${groupBy}, ${contract.aggregation}(${targetCol})\n`;
+    code += `SELECT ${groupBy}, ${agg}(${targetCol})\n`;
     code += `FROM ${dataset.name}\n`;
     if (contract.filters.length > 0) {
       code += `WHERE ${contract.filters.map((f) => `${f.column} ${f.operator} '${f.value}'`).join(' AND ')}\n`;
     }
-    code += `GROUP BY ${groupBy}\n`;
-    code += `ORDER BY ${contract.aggregation}(${targetCol}) DESC;`;
+    code += `GROUP BY ${groupBy}\nORDER BY ${agg}(${targetCol}) DESC;`;
 
     const results: { label: string; value: number }[] = [];
     for (const [label, values] of groups) {
-      results.push({ label, value: aggregateValues(values, contract.aggregation) });
+      results.push({ label, value: aggregateValues(values, agg) });
     }
     results.sort((a, b) => b.value - a.value);
 
@@ -336,31 +531,29 @@ function primaryCalculation(
       code,
       method: 'SQL Iterative Aggregation',
       rowsUsed: filteredRows.length,
-      details: { groupCount: results.length, aggregation: contract.aggregation },
-    };
-  } else {
-    const values = filteredRows
-      .map((r) => Number(r[targetCol]))
-      .filter((v) => !isNaN(v));
-
-    let code = `-- Primary SQL-style calculation\n`;
-    code += `SELECT ${contract.aggregation}(${targetCol})\n`;
-    code += `FROM ${dataset.name}\n`;
-    if (contract.filters.length > 0) {
-      code += `WHERE ${contract.filters.map((f) => `${f.column} ${f.operator} '${f.value}'`).join(' AND ')}\n`;
-    }
-    code += `;`;
-
-    const result = aggregateValues(values, contract.aggregation);
-
-    return {
-      value: result,
-      code,
-      method: 'SQL Iterative Aggregation',
-      rowsUsed: filteredRows.length,
-      details: { aggregation: contract.aggregation, count: values.length },
+      details: { groupCount: results.length, aggregation: agg },
     };
   }
+
+  // --- Scalar numeric aggregation ---
+  const values = filteredRows
+    .map((r) => Number(r[targetCol]))
+    .filter((v) => !isNaN(v));
+
+  let code = `-- Primary SQL-style calculation\n`;
+  code += `SELECT ${agg}(${targetCol})\nFROM ${dataset.name}\n`;
+  if (contract.filters.length > 0) {
+    code += `WHERE ${contract.filters.map((f) => `${f.column} ${f.operator} '${f.value}'`).join(' AND ')}\n`;
+  }
+  code += `;`;
+
+  return {
+    value: aggregateValues(values, agg),
+    code,
+    method: 'SQL Iterative Aggregation',
+    rowsUsed: filteredRows.length,
+    details: { aggregation: agg, count: values.length },
+  };
 }
 
 // INDEPENDENT CALCULATION: Functional/reduce-based approach (different code path)
@@ -371,35 +564,88 @@ function independentCalculation(
   const filteredRows = applyFilters(dataset.rows, contract.filters);
   const targetCol = contract.targetColumn || '';
   const groupBy = contract.groupBy;
+  const agg = contract.aggregation;
 
+  // --- LIST ---
+  if (agg === 'LIST') {
+    const dateCol = dataset.columns.find((c) => c.type === 'date')?.name;
+    const sorted = dateCol
+      ? [...filteredRows].sort((a, b) => String(b[dateCol]).localeCompare(String(a[dateCol])))
+      : filteredRows;
+    const top10 = sorted.slice(0, 10);
+    const code =
+      `# Independent Python/Pandas calculation\nimport pandas as pd\n` +
+      `df = pd.read_csv('${dataset.name}')\n` +
+      (dateCol ? `result = df.sort_values('${dateCol}', ascending=False).head(10)\n` : `result = df.head(10)\n`) +
+      `print(result.to_string())`;
+    return {
+      value: top10,
+      code,
+      method: 'Python/Pandas Row Listing',
+      rowsUsed: filteredRows.length,
+      details: { aggregation: 'LIST', returned: top10.length },
+    };
+  }
+
+  // --- PERCENTAGE ---
+  if (agg === 'PCT') {
+    const total = dataset.rows.length;
+    const matching = filteredRows.length;
+    const pct = total > 0 ? (matching / total) * 100 : 0;
+    const filterDesc = contract.filters.map((f) => `df['${f.column}'].str.lower() == '${f.value}'`).join(' & ');
+    const code =
+      `# Independent Python/Pandas calculation\nimport pandas as pd\n` +
+      `df = pd.read_csv('${dataset.name}')\n` +
+      (filterDesc ? `mask = ${filterDesc}\nresult = round(mask.sum() / len(df) * 100, 4)\n` : `result = 100.0\n`) +
+      `print(result)`;
+    return {
+      value: Math.round(pct * 10000) / 10000,
+      code,
+      method: 'Python/Pandas Reduce-Based',
+      rowsUsed: total,
+      details: { matching, total, aggregation: 'PCT' },
+    };
+  }
+
+  // --- COUNT of filtered rows ---
+  if (agg === 'COUNT' && !targetCol) {
+    const count = filteredRows.length;
+    const filterDesc = contract.filters.map((f) => `df['${f.column}'].astype(str).str.lower() == '${f.value}'`).join(' & ');
+    const code =
+      `# Independent Python/Pandas calculation\nimport pandas as pd\n` +
+      `df = pd.read_csv('${dataset.name}')\n` +
+      (filterDesc ? `result = len(df[${filterDesc}])\n` : `result = len(df)\n`) +
+      `print(result)`;
+    return {
+      value: count,
+      code,
+      method: 'Python/Pandas Reduce-Based',
+      rowsUsed: filteredRows.length,
+      details: { aggregation: 'COUNT' },
+    };
+  }
+
+  // --- GROUP BY ---
   if (groupBy) {
-    // Different approach: use reduce to build groups
     const grouped = filteredRows.reduce<Record<string, number[]>>((acc, row) => {
       const key = String(row[groupBy] || 'Unknown');
       const val = Number(row[targetCol]);
-      if (!isNaN(val)) {
-        (acc[key] = acc[key] || []).push(val);
-      }
+      if (!isNaN(val)) (acc[key] = acc[key] || []).push(val);
       return acc;
     }, {});
 
-    let code = `# Independent Python/Pandas calculation\n`;
-    code += `import pandas as pd\n`;
-    code += `df = pd.DataFrame(${dataset.name}_rows)\n`;
+    const aggFn = agg.toLowerCase() === 'avg' ? 'mean' : agg.toLowerCase() === 'sum' ? 'sum' :
+      agg.toLowerCase() === 'count' ? 'count' : agg.toLowerCase() === 'max' ? 'max' :
+      agg.toLowerCase() === 'min' ? 'min' : 'median';
+    let code = `# Independent Python/Pandas calculation\nimport pandas as pd\n`;
+    code += `df = pd.read_csv('${dataset.name}')\n`;
     if (contract.filters.length > 0) {
-      code += contract.filters
-        .map((f) => `df = df[df['${f.column}'] ${f.operator} '${f.value}']`)
-        .join('\n');
-      code += '\n';
+      code += contract.filters.map((f) => `df = df[df['${f.column}'].astype(str).str.lower() == '${f.value}']`).join('\n') + '\n';
     }
-    code += `result = df.groupby('${groupBy}')['${targetCol}'].${contract.aggregation.toLowerCase() === 'avg' ? 'mean' : contract.aggregation.toLowerCase() === 'sum' ? 'sum' : contract.aggregation.toLowerCase() === 'count' ? 'count' : contract.aggregation.toLowerCase() === 'max' ? 'max' : contract.aggregation.toLowerCase() === 'min' ? 'min' : 'median'}()\n`;
-    code += `result = result.sort_values(ascending=False)`;
+    code += `result = df.groupby('${groupBy}')['${targetCol}'].${aggFn}().sort_values(ascending=False)`;
 
     const results: { label: string; value: number }[] = Object.entries(grouped)
-      .map(([label, vals]) => ({
-        label,
-        value: aggregateValues(vals, contract.aggregation),
-      }))
+      .map(([label, vals]) => ({ label, value: aggregateValues(vals, agg) }))
       .sort((a, b) => b.value - a.value);
 
     return {
@@ -407,35 +653,29 @@ function independentCalculation(
       code,
       method: 'Python/Pandas Reduce-Based',
       rowsUsed: filteredRows.length,
-      details: { groupCount: results.length, aggregation: contract.aggregation },
-    };
-  } else {
-    // Different approach: use reduce
-    const values = filteredRows
-      .map((r) => Number(r[targetCol]))
-      .filter((v) => !isNaN(v));
-
-    let code = `# Independent Python/Pandas calculation\n`;
-    code += `import pandas as pd\n`;
-    code += `df = pd.DataFrame(${dataset.name}_rows)\n`;
-    if (contract.filters.length > 0) {
-      code += contract.filters
-        .map((f) => `df = df[df['${f.column}'] ${f.operator} '${f.value}']`)
-        .join('\n');
-      code += '\n';
-    }
-    code += `result = df['${targetCol}'].${contract.aggregation.toLowerCase() === 'avg' ? 'mean' : contract.aggregation.toLowerCase() === 'sum' ? 'sum' : contract.aggregation.toLowerCase() === 'count' ? 'count' : contract.aggregation.toLowerCase() === 'max' ? 'max' : contract.aggregation.toLowerCase() === 'min' ? 'min' : 'median'}()`;
-
-    const result = aggregateValues(values, contract.aggregation);
-
-    return {
-      value: result,
-      code,
-      method: 'Python/Pandas Reduce-Based',
-      rowsUsed: filteredRows.length,
-      details: { aggregation: contract.aggregation, count: values.length },
+      details: { groupCount: results.length, aggregation: agg },
     };
   }
+
+  // --- Scalar numeric ---
+  const values = filteredRows.map((r) => Number(r[targetCol])).filter((v) => !isNaN(v));
+  const aggFn = agg.toLowerCase() === 'avg' ? 'mean' : agg.toLowerCase() === 'sum' ? 'sum' :
+    agg.toLowerCase() === 'count' ? 'count' : agg.toLowerCase() === 'max' ? 'max' :
+    agg.toLowerCase() === 'min' ? 'min' : 'median';
+  let code = `# Independent Python/Pandas calculation\nimport pandas as pd\n`;
+  code += `df = pd.read_csv('${dataset.name}')\n`;
+  if (contract.filters.length > 0) {
+    code += contract.filters.map((f) => `df = df[df['${f.column}'].astype(str).str.lower() == '${f.value}']`).join('\n') + '\n';
+  }
+  code += `result = df['${targetCol}'].${aggFn}()`;
+
+  return {
+    value: aggregateValues(values, agg),
+    code,
+    method: 'Python/Pandas Reduce-Based',
+    rowsUsed: filteredRows.length,
+    details: { aggregation: agg, count: values.length },
+  };
 }
 
 function aggregateValues(values: number[], aggregation: string): number {
@@ -465,9 +705,23 @@ function aggregateValues(values: number[], aggregation: string): number {
 }
 
 function resultsMatch(
-  primary: number | { label: string; value: number }[],
-  independent: number | { label: string; value: number }[]
+  primary: number | { label: string; value: number }[] | Record<string, string | number | null>[],
+  independent: number | { label: string; value: number }[] | Record<string, string | number | null>[]
 ): { match: boolean; details: string } {
+  // LIST mode — both are row arrays, match if same row count
+  if (
+    Array.isArray(primary) && Array.isArray(independent) &&
+    primary.length > 0 && typeof (primary[0] as Record<string, unknown>).label === 'undefined' &&
+    !('value' in (primary[0] as object))
+  ) {
+    const match = primary.length === independent.length;
+    return {
+      match,
+      details: match
+        ? `Both methods returned ${primary.length} rows`
+        : `MISMATCH: ${primary.length} vs ${independent.length} rows`,
+    };
+  }
   if (typeof primary === 'number' && typeof independent === 'number') {
     const match = Math.abs(primary - independent) < 0.01;
     return {
@@ -520,8 +774,12 @@ export function runVerification(
   if (match) status = 'verified';
   else status = 'verification_failed';
 
-  // Check if data quality is too low
-  if (primaryResult.rowsUsed === 0) {
+  // PCT uses total rows, COUNT uses filtered rows — both valid
+  const effectiveRowsUsed = contract.aggregation === 'PCT'
+    ? dataset.rows.length
+    : primaryResult.rowsUsed;
+
+  if (effectiveRowsUsed === 0) {
     status = 'cannot_verify';
   }
 
@@ -534,17 +792,31 @@ export function runVerification(
   };
 }
 
-export function formatResultValue(value: number | { label: string; value: number }[]): string {
+export function formatResultValue(
+  value: number | { label: string; value: number }[] | Record<string, string | number | null>[],
+  isCurrency = false
+): string {
   if (typeof value === 'number') {
-    if (value >= 10000000) return `₹${(value / 10000000).toFixed(2)} Cr`;
-    if (value >= 100000) return `₹${(value / 100000).toFixed(2)} L`;
-    if (value >= 1000) return `₹${value.toLocaleString('en-IN')}`;
-    if (value % 1 !== 0) return `₹${value.toFixed(2)}`;
+    if (isCurrency) {
+      if (value >= 10000000) return `\u20b9${(value / 10000000).toFixed(2)} Cr`;
+      if (value >= 100000) return `\u20b9${(value / 100000).toFixed(2)} L`;
+      if (value >= 1000) return `\u20b9${value.toLocaleString('en-IN')}`;
+      return `\u20b9${value.toFixed(2)}`;
+    }
+    if (value % 1 !== 0) return value.toFixed(2);
     return value.toLocaleString('en-IN');
   }
-  const top = value[0];
-  if (!top) return 'N/A';
-  return `${top.label}: ${formatResultValue(top.value)}`;
+  if (Array.isArray(value) && value.length > 0) {
+    const first = value[0] as Record<string, unknown>;
+    // LIST rows — no label/value shape
+    if (!('label' in first) && !('value' in first)) {
+      return `${value.length} rows`;
+    }
+    // grouped result
+    const top = value[0] as { label: string; value: number };
+    return `${top.label}: ${formatResultValue(top.value, isCurrency)}`;
+  }
+  return 'N/A';
 }
 
 export function generateProofId(): string {
