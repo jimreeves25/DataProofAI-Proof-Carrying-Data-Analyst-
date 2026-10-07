@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
@@ -33,7 +33,7 @@ interface DatasetInfo {
   is_sample: boolean;
 }
 
-export default function AnalyticsStudioPage() {
+function AnalyticsStudioContent() {
   const searchParams = useSearchParams();
   const { user } = useAuth();
   const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
@@ -495,5 +495,13 @@ export default function AnalyticsStudioPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+export default function AnalyticsStudioPage() {
+  return (
+    <Suspense fallback={<div className="flex h-full items-center justify-center text-slate-400">Loading...</div>}>
+      <AnalyticsStudioContent />
+    </Suspense>
   );
 }

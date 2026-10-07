@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
@@ -37,7 +37,7 @@ interface DatasetInfo {
 
 type Stage = 'question' | 'contract' | 'assumptions' | 'execution' | 'result';
 
-export default function NewAnalysisPage() {
+function NewAnalysisContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user } = useAuth();
@@ -630,5 +630,13 @@ export default function NewAnalysisPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function NewAnalysisPage() {
+  return (
+    <Suspense fallback={<div className="flex h-full items-center justify-center text-slate-400">Loading...</div>}>
+      <NewAnalysisContent />
+    </Suspense>
   );
 }

@@ -212,7 +212,7 @@ export default function ReportsPage() {
       doc.setFont('helvetica', 'normal');
       doc.text(`Source: ${selectedDataset.name}`, 14, y); y += 6;
       doc.text(`Rows: ${selectedDataset.rows.length.toLocaleString()}`, 14, y); y += 6;
-      doc.text(`Columns: ${selectedDataset.column_count}`, 14, y); y += 6;
+      doc.text(`Columns: ${selectedDataset.columns.length}`, 14, y); y += 6;
       if (dateCol) {
         const trend = computeTimeSeries(selectedDataset.rows, dateCol.name, numericCols[0]?.name || '', 'SUM');
         if (trend.length > 0) {

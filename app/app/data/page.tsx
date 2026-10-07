@@ -61,10 +61,10 @@ export default function DataSourcesPage() {
 
         if (ds) {
           // Save quality report
-          const { supabase } = await import('@/lib/supabase');
-          await supabase.from('data_quality_reports').insert({
+          const { supabase: sb } = await import('@/lib/supabase');
+          await sb.from('data_quality_reports').insert({
             dataset_id: ds.id,
-            user_id: ds.user_id || (await supabase.auth.getUser()).data.user?.id,
+            user_id: (await sb.auth.getUser()).data.user?.id,
             completeness: quality.completeness,
             validity: quality.validity,
             consistency: quality.consistency,
@@ -131,10 +131,10 @@ export default function DataSourcesPage() {
       });
 
       if (ds) {
-        const { supabase } = await import('@/lib/supabase');
-        const { data: { user } } = await supabase.auth.getUser();
+        const { supabase: sb } = await import('@/lib/supabase');
+        const { data: { user } } = await sb.auth.getUser();
         if (user) {
-          await supabase.from('data_quality_reports').insert({
+          await sb.from('data_quality_reports').insert({
             dataset_id: ds.id,
             user_id: user.id,
             completeness: quality.completeness,
