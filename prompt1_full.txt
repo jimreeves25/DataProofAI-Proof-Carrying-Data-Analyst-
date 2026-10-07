@@ -1,0 +1,1536 @@
+<USER_REQUEST>
+We are now implementing **HNX26PSI08 — Proof-Carrying Data Analyst (Agentic GenAI)**.
+
+The environment setup is already complete:
+
+### Verified environment
+
+* Windows
+* Python 3.11.9
+* FastAPI
+* Uvicorn
+* Pydantic
+* OpenAI SDK
+* LangChain
+* LangChain OpenAI
+* pandas
+* NumPy
+* SciPy
+* scikit-learn
+* SQLAlchemy
+* psycopg
+* openpyxl
+* pyarrow
+* pypdf
+* pdfplumber
+* React
+* TypeScript
+* Vite
+* Axios
+* Recharts
+* Tailwind CSS
+* PostgreSQL 17.10
+
+Docker is being configured separately and will be used for the secure code-execution sandbox.
+
+---
+
+# 1. CORE OBJECTIVE
+
+Build a working **Proof-Carrying Data Analyst**.
+
+The system must NOT behave like a normal chatbot that simply guesses an answer.
+
+Its central principle is:
+
+> **Every numerical answer must be backed by executable analysis code, an actual execution result, verification, and evidence. If the result cannot be reliably verified, the system must refuse to answer or re-plan the analysis.**
+
+The system must handle messy real-world data including:
+
+* CSV
+* Excel
+* JSON where practical
+* Parquet
+* multiple related tables
+* missing values
+* duplicate rows
+* ambiguous dates
+* unit mismatches
+* conflicting data
+* unsupported questions
+* insufficient data
+* misleading/trap questions
+
+---
+
+# 2. MANDATORY WORKFLOW
+
+Implement EXACTLY this conceptual pipeline:
+
+```text
+USER
+  │
+  │ Question + datasets
+  ▼
+┌──────────────────────┐
+│ 1. DATA INSPECTOR    │
+│ Understand all files │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 2. AI AGENT          │
+│ Understand question  │
+│ Plan analysis        │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 3. CODE GENERATOR    │
+│ Creates Python code  │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 4. CODE EXECUTOR     │
+│ Actually runs code   │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 5. VERIFIER          │
+│ Checks result/code   │
+└──────────┬───────────┘
+        ┌──┴──┐
+        │     │
+      PASS   FAIL
+        │     │
+        ▼     ▼
+    ANSWER   REPLAN
+              │
+              └──────→ AI AGENT
+```
+
+This workflow is NOT optional.
+
+Do not replace it with a single LLM call.
+
+---
+
+# 3. ARCHITECTURE
+
+Use a modular backend.
+
+Create a structure similar to:
+
+```text
+backend/
+│
+├── app/
+│   ├── main.py
+│   │
+│   ├── api/
+│   │   └── analysis.py
+│   │
+│   ├── agents/
+│   │   ├── analyst_agent.py
+│   │   └── prompts.py
+│   │
+│   ├── inspector/
+│   │   └── data_inspector.py
+│   │
+│   ├── generator/
+│   │   └── code_generator.py
+│   │
+│   ├── executor/
+│   │   └── code_executor.py
+│   │
+│   ├── verifier/
+│   │   └── verifier.py
+│   │
+│   ├── llm/
+│   │   ├── llm_client.py
+│   │   └── llm_config.py
+│   │
+│   ├── models/
+│   │   └── schemas.py
+│   │
+│   └── services/
+│       └── analysis_service.py
+│
+├── tests/
+│
+└── requirements.txt
+```
+
+Adapt the existing project structure if necessary rather than unnecessarily rewriting existing working code.
+
+---
+
+# 4. IMPORTANT — CREATE A DEDICATED LLM API FILE
+
+Create:
+
+```text
+backend/app/llm/llm_client.py
+```
+
+This file must be the ONLY place responsible for direct LLM API communication.
+
+Do NOT scatter OpenAI API calls throughout the application.
+
+Create an abstraction similar to:
+
+```python
+class LLMClient:
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        ...
+```
+
+Use the existing OpenAI SDK dependency.
+
+Read the API key from:
+
+```text
+OPENAI_API_KEY
+```
+
+through environment variables.
+
+Create:
+
+```text
+backend/app/llm/llm_config.py
+```
+
+for model/configuration settings.
+
+The actual model name must come from configuration/environment rather than being hard-coded throughout the application.
+
+Example:
+
+```text
+OPENAI_MODEL=
+```
+
+in `.env.example`.
+
+Do NOT put an actual API key in source code.
+
+---
+
+# 5. LLM API DESIGN
+
+The LLM client must support:
+
+* system prompt
+* user prompt
+* structured output where practical
+* error handling
+* timeout handling
+* retry handling where appropriate
+* clear API errors
+* logging without exposing API keys
+
+Do NOT make the LLM client responsible for:
+
+* reading files
+* executing Python
+* verifying results
+* deciding final truth
+
+The LLM is an analysis/planning component.
+
+The verifier remains independent.
+
+---
+
+# 6. DATA INSPECTOR
+
+Implement:
+
+```text
+backend/app/inspector/data_inspector.py
+```
+
+Its job is to inspect every uploaded dataset BEFORE the AI generates code.
+
+For each file determine:
+
+* filename
+* format
+* number of rows
+* number of columns
+* column names
+* inferred data types
+* sample rows
+* missing-value counts
+* duplicate-row count
+* unique-value counts where useful
+* numeric ranges
+* date-like columns
+* possible currency/unit columns
+* suspicious columns
+* relationships between tables where detectable
+
+For example:
+
+```json
+{
+  "filename": "sales.csv",
+  "rows": 1500,
+  "columns": ["date", "product", "units", "revenue"],
+  "missing_values": {
+    "revenue": 12
+  },
+  "duplicates": 5
+}
+```
+
+The inspector should NOT ask the LLM to perform basic deterministic statistics that Python can calculate itself.
+
+Use Python for deterministic inspection.
+
+---
+
+# 7. DATA PROFILE
+
+Create a structured internal representation:
+
+```text
+DataProfile
+```
+
+containing information about all uploaded files.
+
+The AI Agent receives the DataProfile instead of blindly receiving raw files.
+
+The profile must identify potential problems:
+
+```text
+WARNING:
+12 missing revenue values
+
+WARNING:
+5 duplicate rows
+
+WARNING:
+currency column detected
+
+WARNING:
+two date columns have different formats
+```
+
+---
+
+# 8. AI AGENT
+
+Create:
+
+```text
+backend/app/agents/analyst_agent.py
+```
+
+The agent receives:
+
+```text
+User question
++
+DataProfile
++
+available datasets
++
+previous failed attempt, if any
+```
+
+Its responsibility is to determine:
+
+1. What is the user asking?
+2. Which datasets are relevant?
+3. Which columns are required?
+4. What calculations are required?
+5. Are there ambiguities?
+6. Are there missing values?
+7. Are there unit mismatches?
+8. Are there contradictory sources?
+9. Can the question actually be answered?
+10. What analysis plan should be used?
+
+The agent should output a structured plan.
+
+Example:
+
+```json
+{
+  "answerable": true,
+  "reason": null,
+  "datasets": ["sales.csv", "expenses.csv"],
+  "operations": [
+    "filter Q2 records",
+    "aggregate revenue",
+    "aggregate expenses",
+    "calculate profit margin"
+  ],
+  "required_columns": [
+    "date",
+    "revenue",
+    "expense"
+  ]
+}
+```
+
+If the question is clearly unanswerable:
+
+```json
+{
+  "answerable": false,
+  "reason": "Expense data is missing for Q2."
+}
+```
+
+In that case DO NOT generate code.
+
+Return a controlled refusal.
+
+---
+
+# 9. CODE GENERATOR
+
+Create:
+
+```text
+backend/app/generator/code_generator.py
+```
+
+The code generator receives:
+
+```text
+User question
++
+DataProfile
++
+AnalysisPlan
+```
+
+and generates Python analysis code.
+
+The generated code must be:
+
+* deterministic
+* readable
+* reproducible
+* self-contained
+* based ONLY on supplied data
+* free from network requests
+* free from filesystem access outside the allowed dataset directory
+* free from shell commands
+* free from arbitrary package installation
+
+Example:
+
+```python
+import pandas as pd
+
+sales = pd.read_csv("sales.csv")
+
+q2 = sales[
+    (sales["date"] >= "2026-04-01") &
+    (sales["date"] < "2026-07-01")
+]
+
+result = q2["revenue"].sum()
+
+print(result)
+```
+
+The generator should return structured information:
+
+```json
+{
+  "code": "...",
+  "expected_output_type": "number",
+  "calculation_description": "Sum Q2 revenue"
+}
+```
+
+---
+
+# 10. NEVER TRUST GENERATED CODE
+
+Before execution, create a safety validation layer.
+
+At minimum detect/reject:
+
+```text
+import os
+import subprocess
+import socket
+import requests
+urllib
+shutil
+eval
+exec
+__import__
+open() outside approved paths
+shell commands
+pip installation
+network access
+system calls
+```
+
+Do NOT rely solely on an LLM to determine whether code is safe.
+
+Use deterministic validation.
+
+---
+
+# 11. CODE EXECUTOR
+
+Create:
+
+```text
+backend/app/executor/code_executor.py
+```
+
+The executor must run generated code in a controlled environment.
+
+Preferred architecture:
+
+```text
+Generated Python
+       ↓
+Static safety validation
+       ↓
+Docker sandbox
+       ↓
+Temporary execution
+       ↓
+Capture stdout
+       ↓
+Capture stderr
+       ↓
+Exit code
+       ↓
+Execution result
+```
+
+Do NOT execute arbitrary generated code directly on the host machine in the production workflow.
+
+Docker should eventually provide:
+
+* CPU limit
+* memory limit
+* timeout
+* temporary filesystem
+* controlled dataset mount
+* no unnecessary network
+* non-root execution
+* no access to host `.env`
+* no access to project secrets
+
+For development, if Docker is unavailable, allow a clearly marked development fallback ONLY for controlled tests.
+
+Never silently treat host execution as equivalent to the secure sandbox.
+
+---
+
+# 12. EXECUTION RESULT
+
+Capture:
+
+```text
+stdout
+stderr
+exit code
+execution time
+result value
+```
+
+Example:
+
+```json
+{
+  "status": "success",
+  "stdout": "5333.33",
+  "stderr": "",
+  "exit_code": 0,
+  "execution_time_ms": 142
+}
+```
+
+If execution fails:
+
+```json
+{
+  "status": "failed",
+  "error": "...",
+  "exit_code": 1
+}
+```
+
+That must trigger REPLAN.
+
+---
+
+# 13. VERIFIER
+
+Create:
+
+```text
+backend/app/verifier/verifier.py
+```
+
+This is one of the MOST IMPORTANT components.
+
+The verifier must NOT simply ask the LLM:
+
+> "Is this answer correct?"
+
+That would defeat the purpose.
+
+Use deterministic checks wherever possible.
+
+Verify:
+
+### Execution
+
+Did the generated code actually run?
+
+### Output
+
+Did it produce the expected result?
+
+### Data consistency
+
+Check:
+
+* missing required values
+* duplicates
+* incompatible types
+* invalid dates
+* suspicious units
+* conflicting values
+
+### Reproducibility
+
+Can the same calculation produce the same result again?
+
+### Expected result type
+
+If expected:
+
+```text
+number
+```
+
+don't accept:
+
+```text
+random prose
+```
+
+### Numerical consistency
+
+Where practical, independently recalculate the final numerical result.
+
+For example:
+
+```text
+Generated result:
+53.33
+
+Independent verifier:
+53.33
+
+Difference:
+0.00
+
+PASS
+```
+
+---
+
+# 14. VERIFICATION CONTRACT
+
+Create a structured result:
+
+```json
+{
+  "status": "PASS",
+  "generated_result": 53.33,
+  "verified_result": 53.33,
+  "difference": 0.0,
+  "checks": {
+    "code_executed": true,
+    "result_present": true,
+    "data_valid": true,
+    "reproducible": true,
+    "independent_check": true
+  }
+}
+```
+
+For failure:
+
+```json
+{
+  "status": "FAIL",
+  "reason": "Generated result differs from independent calculation.",
+  "generated_result": 53.33,
+  "verified_result": 51.21
+}
+```
+
+---
+
+# 15. PASS / FAIL CONTROL LOOP
+
+This is mandatory.
+
+Implement:
+
+```text
+AI Agent
+   ↓
+Code Generator
+   ↓
+Code Executor
+   ↓
+Verifier
+   ↓
+      PASS ─────────→ ANSWER
+       │
+      FAIL
+       │
+       ▼
+     REPLAN
+       │
+       ▼
+   AI Agent
+```
+
+Set a maximum number of replanning attempts.
+
+Example:
+
+```text
+MAX_REPLAN_ATTEMPTS = 3
+```
+
+Never create an infinite loop.
+
+---
+
+# 16. REPLAN BEHAVIOR
+
+When verification fails, the AI Agent receives:
+
+```text
+Original question
++
+Original data profile
++
+Previous analysis plan
++
+Previous generated code
++
+Execution output
++
+Verifier failure reason
+```
+
+Then it creates a new plan.
+
+Example:
+
+```text
+Attempt 1:
+Used revenue column incorrectly.
+
+Verifier:
+FAIL — selected column is gross revenue, not net revenue.
+
+↓
+
+REPLAN
+
+Attempt 2:
+Use net_revenue column.
+
+↓
+
+Execute
+
+↓
+
+Verify
+
+↓
+
+PASS
+```
+
+This should be visible in the internal execution trace.
+
+---
+
+# 17. REFUSAL ENGINE
+
+The system must know when NOT to answer.
+
+Examples:
+
+### Missing data
+
+```text
+Question:
+"What was profit in April?"
+
+Revenue exists.
+Expenses missing.
+
+→ REFUSE
+```
+
+### Unit mismatch
+
+```text
+Revenue:
+USD
+
+Cost:
+EUR
+
+No conversion information.
+
+→ REFUSE
+```
+
+### Contradictory sources
+
+```text
+sales.csv:
+Revenue = 50,000
+
+report.xlsx:
+Revenue = 60,000
+
+No source priority.
+
+→ REFUSE / REQUEST CLARIFICATION
+```
+
+### Ambiguous question
+
+```text
+"What were sales last quarter?"
+
+Multiple possible date definitions.
+
+→ ASK FOR CLARIFICATION
+```
+
+The system must prefer:
+
+```text
+"I cannot determine this reliably from the supplied data."
+```
+
+over a fabricated answer.
+
+---
+
+# 18. PROOF PACKAGE
+
+For every successful answer create a structured ProofPackage.
+
+Example:
+
+```json
+{
+  "question": "...",
+  "answer": "53.33%",
+  "status": "VERIFIED",
+
+  "datasets_used": [
+    "sales.csv",
+    "expenses.csv"
+  ],
+
+  "calculation_code": "...",
+
+  "execution": {
+    "status": "success",
+    "stdout": "53.33"
+  },
+
+  "verification": {
+    "status": "PASS",
+    "generated_result": 53.33,
+    "verified_result": 53.33
+  },
+
+  "evidence": {
+    "columns": [
+      "revenue",
+      "expense"
+    ],
+    "filters": [
+      "Q2"
+    ]
+  }
+}
+```
+
+This is the defining artifact of the project.
+
+---
+
+# 19. API
+
+Create an endpoint such as:
+
+```text
+POST /api/v1/analyze
+```
+
+It should accept:
+
+```text
+question
++
+uploaded datasets
+```
+
+and return the complete analysis result.
+
+Possible response:
+
+```json
+{
+  "status": "VERIFIED",
+  "answer": "Product A had the highest Q2 profit margin at 38.42%.",
+  "proof": {...},
+  "attempts": 2
+}
+```
+
+For refusal:
+
+```json
+{
+  "status": "UNANSWERABLE",
+  "answer": null,
+  "reason": "Expense data is missing for Q2.",
+  "attempts": 1
+}
+```
+
+---
+
+# 20. FRONTEND
+
+Build a simple React interface.
+
+Do NOT spend excessive time on visual design yet.
+
+The frontend needs:
+
+### Dataset upload
+
+```text
+[ Upload CSV / Excel / JSON ]
+```
+
+### Question box
+
+```text
+Ask a question about your data...
+```
+
+### Analyze button
+
+```text
+[ Analyze ]
+```
+
+### Analysis progress
+
+Show:
+
+```text
+✓ Data inspected
+
+✓ Analysis plan created
+
+✓ Code generated
+
+✓ Code executed
+
+✓ Verification passed
+```
+
+If re-planning:
+
+```text
+⚠ Verification failed
+
+↻ Re-planning analysis...
+```
+
+### Final result
+
+Display:
+
+```text
+ANSWER
+────────────
+Product A
+38.42%
+
+🟢 VERIFIED
+```
+
+### Proof
+
+Provide expandable sections:
+
+```text
+▸ Datasets used
+▸ Generated code
+▸ Execution result
+▸ Verification
+▸ Evidence
+▸ Analysis attempts
+```
+
+For refusal:
+
+```text
+🔴 CANNOT DETERMINE
+
+Reason:
+The required expense data is missing.
+```
+
+---
+
+# 21. API/LLM SEPARATION
+
+Keep this architecture:
+
+```text
+Frontend
+   ↓
+FastAPI
+   ↓
+Analysis Service
+   ├── Data Inspector
+   ├── AI Agent
+   │      ↓
+   │   LLM Client
+   ├── Code Generator
+   ├── Code Safety Validator
+   ├── Code Executor
+   └── Verifier
+```
+
+Only:
+
+```text
+LLMClient
+```
+
+communicates directly with the LLM provider.
+
+---
+
+# 22. TEST DATA
+
+Create realistic demo datasets specifically designed to test the PS08 requirements.
+
+Create:
+
+```text
+data/demo/
+```
+
+with examples such as:
+
+```text
+sales.csv
+expenses.csv
+inventory.csv
+```
+
+Also create intentionally problematic datasets:
+
+```text
+duplicate_sales.csv
+missing_expenses.csv
+conflicting_revenue.csv
+mixed_currency.csv
+ambiguous_dates.csv
+```
+
+DO NOT use only clean toy data.
+
+The demo should prove that the system handles traps.
+
+---
+
+# 23. MANDATORY TEST CASES
+
+Implement automated tests for at least:
+
+### Test 1 — Simple average
+
+Question:
+
+```text
+What is the average revenue?
+```
+
+Expected:
+
+```text
+PASS
+```
+
+### Test 2 — Multiple tables
+
+Question:
+
+```text
+Which product generated the highest profit?
+```
+
+Expected:
+
+```text
+PASS
+```
+
+### Test 3 — Missing data
+
+Expected:
+
+```text
+REFUSE
+```
+
+### Test 4 — Duplicate rows
+
+Expected:
+
+```text
+DETECT / HANDLE
+```
+
+### Test 5 — Unit mismatch
+
+Expected:
+
+```text
+REFUSE
+```
+
+### Test 6 — Conflicting datasets
+
+Expected:
+
+```text
+REFUSE / FLAG CONFLICT
+```
+
+### Test 7 — Invalid generated code
+
+Expected:
+
+```text
+FAIL
+→ REPLAN
+```
+
+### Test 8 — Correct generated code
+
+Expected:
+
+```text
+PASS
+→ ANSWER
+```
+
+### Test 9 — Reproducibility
+
+Run the same proof twice.
+
+Expected:
+
+```text
+same result
+```
+
+### Test 10 — Infinite loop protection
+
+Force repeated verification failures.
+
+Expected:
+
+```text
+maximum attempts reached
+→ controlled failure
+```
+
+---
+
+# 24. OBSERVABILITY
+
+The UI should eventually show the reasoning pipeline without exposing private chain-of-thought.
+
+Show only structured execution events:
+
+```text
+DATA_INSPECTION_COMPLETE
+
+PLAN_CREATED
+
+CODE_GENERATED
+
+CODE_EXECUTED
+
+VERIFICATION_FAILED
+
+REPLAN_STARTED
+
+CODE_REGENERATED
+
+VERIFICATION_PASSED
+
+ANSWER_GENERATED
+```
+
+Do NOT expose hidden model chain-of-thought.
+
+---
+
+# 25. SECURITY
+
+Never:
+
+* execute arbitrary code directly on the host in production
+* expose API keys
+* allow generated code to access `.env`
+* allow unrestricted network access
+* allow generated code to install packages
+* allow generated code to execute shell commands
+* trust LLM-generated verification
+* trust an answer merely because the LLM sounds confident
+
+---
+
+# 26. ERROR HANDLING
+
+Every layer must return controlled errors.
+
+Examples:
+
+```text
+LLM unavailable
+Dataset unreadable
+Unsupported file
+Invalid generated code
+Execution timeout
+Sandbox failure
+Verification failure
+Maximum replans reached
+Insufficient data
+Conflicting sources
+```
+
+Never crash the whole API because one analysis failed.
+
+---
+
+# 27. IMPLEMENTATION ORDER
+
+DO NOT build everything simultaneously.
+
+Implement in this order:
+
+### STEP 1
+
+Data Inspector
+
+↓
+
+### STEP 2
+
+ProofPackage schemas
+
+↓
+
+### STEP 3
+
+Code Generator abstraction
+
+↓
+
+### STEP 4
+
+Code Safety Validator
+
+↓
+
+### STEP 5
+
+Code Executor
+
+↓
+
+### STEP 6
+
+Verifier
+
+↓
+
+### STEP 7
+
+PASS / FAIL / REPLAN loop
+
+↓
+
+### STEP 8
+
+LLM Client integration
+
+↓
+
+### STEP 9
+
+AI Agent
+
+↓
+
+### STEP 10
+
+FastAPI endpoint
+
+↓
+
+### STEP 11
+
+React frontend
+
+↓
+
+### STEP 12
+
+Demo datasets
+
+↓
+
+### STEP 13
+
+Automated tests
+
+Do not skip ahead just because a later component is easier.
+
+---
+
+# 28. CRITICAL ARCHITECTURAL RULE
+
+The LLM must NEVER be the final authority.
+
+The trust hierarchy is:
+
+```text
+                  LLM
+                   ↓
+              Suggestion
+                   ↓
+             Generated Code
+                   ↓
+              Execution
+                   ↓
+          Independent Verification
+                   ↓
+              FINAL TRUST
+```
+
+The LLM can propose.
+
+The execution engine demonstrates.
+
+The verifier decides whether the result is acceptable.
+
+---
+
+# 29. DEMO SCENARIO
+
+The final MVP must support this demonstration:
+
+### Upload
+
+```text
+sales.csv
+expenses.csv
+inventory.csv
+```
+
+### Ask
+
+> "Which product had the highest profit margin in Q2?"
+
+### System
+
+```text
+1. Inspect datasets
+2. Identify relevant columns
+3. Create analysis plan
+4. Generate Python
+5. Validate Python
+6. Execute in sandbox
+7. Independently verify
+8. Return result
+```
+
+### UI
+
+```text
+Product A
+
+Profit Margin: 38.42%
+
+🟢 VERIFIED
+```
+
+Then show:
+
+```text
+Generated Code
+↓
+Execution Result
+↓
+Independent Verification
+↓
+Proof
+```
+
+Then demonstrate a trap:
+
+Ask:
+
+> "What was the profit margin in April?"
+
+while April expenses are missing.
+
+System must respond:
+
+```text
+🔴 CANNOT DETERMINE
+
+April expense data is missing.
+
+The system intentionally did not generate
+a numerical answer.
+```
+
+This refusal is a FEATURE, not an error.
+
+---
+
+# 30. DO NOT OVERENGINEER
+
+For the first implementation, DO NOT add:
+
+* Kubernetes
+* microservices
+* Redis
+* cloud deployment
+* complex vector databases
+* multi-agent swarms
+* unnecessary authentication
+* unnecessary RAG
+* unnecessary ML models
+
+First make this work perfectly:
+
+```text
+DATA
+ ↓
+INSPECT
+ ↓
+PLAN
+ ↓
+GENERATE CODE
+ ↓
+EXECUTE
+ ↓
+VERIFY
+ ↓
+PASS → ANSWER
+FAIL → REPLAN
+```
+
+That is the MVP.
+
+---
+
+# 31. FINAL REQUIREMENT
+
+After implementation, run the complete test suite.
+
+Then report:
+
+### Files created/modified
+
+### Architecture implemented
+
+### API endpoints
+
+### LLM integration
+
+### Data Inspector
+
+### Code Generator
+
+### Code Safety Validator
+
+### Docker Executor
+
+### Verifier
+
+### Replanning loop
+
+### Refusal logic
+
+### Frontend
+
+### Demo datasets
+
+### Test results
+
+For every component report:
+
+```text
+PASS
+FAIL
+PARTIAL
+NOT IMPLEMENTED
+```
+
+Do not claim a feature works unless it was actually tested.
+
+Do not hide failures.
+
+Do not silently substitute a weaker implementation for a required component.
+
+The final system must demonstrate the defining PS08 concept:
+
+> **An AI answer is not trusted merely because an LLM generated it. The answer earns trust by carrying executable proof and passing independent verification.** 
+note: bro dont empty all the tokens
+
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-07T11:43:40+05:30.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Claude Sonnet 4.6 (Thinking). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

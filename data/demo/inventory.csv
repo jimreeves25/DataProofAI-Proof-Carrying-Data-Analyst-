@@ -1,0 +1,5 @@
+product,stock_units,reorder_threshold,warehouse
+Product_A,948,78,WH_South
+Product_B,176,81,WH_East
+Product_C,966,224,WH_South
+Product_D,483,176,WH_South
