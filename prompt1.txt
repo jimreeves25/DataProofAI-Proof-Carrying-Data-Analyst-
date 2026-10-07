@@ -1,0 +1,204 @@
+<USER_REQUEST>
+We are now implementing **HNX26PSI08 — Proof-Carrying Data Analyst (Agentic GenAI)**.
+
+The environment setup is already complete:
+
+### Verified environment
+
+* Windows
+* Python 3.11.9
+* FastAPI
+* Uvicorn
+* Pydantic
+* OpenAI SDK
+* LangChain
+* LangChain OpenAI
+* pandas
+* NumPy
+* SciPy
+* scikit-learn
+* SQLAlchemy
+* psycopg
+* openpyxl
+* pyarrow
+* pypdf
+* pdfplumber
+* React
+* TypeScript
+* Vite
+* Axios
+* Recharts
+* Tailwind CSS
+* PostgreSQL 17.10
+
+Docker is being configured separately and will be used for the secure code-execution sandbox.
+
+---
+
+# 1. CORE OBJECTIVE
+
+Build a working **Proof-Carrying Data Analyst**.
+
+The system must NOT behave like a normal chatbot that simply guesses an answer.
+
+Its central principle is:
+
+> **Every numerical answer must be backed by executable analysis code, an actual execution result, verification, and evidence. If the result cannot be reliably verified, the system must refuse to answer or re-plan the analysis.**
+
+The system must handle messy real-world data including:
+
+* CSV
+* Excel
+* JSON where practical
+* Parquet
+* multiple related tables
+* missing values
+* duplicate rows
+* ambiguous dates
+* unit mismatches
+* conflicting data
+* unsupported questions
+* insufficient data
+* misleading/trap questions
+
+---
+
+# 2. MANDATORY WORKFLOW
+
+Implement EXACTLY this conceptual pipeline:
+
+```text
+USER
+  │
+  │ Question + datasets
+  ▼
+┌──────────────────────┐
+│ 1. DATA INSPECTOR    │
+│ Understand all files │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 2. AI AGENT          │
+│ Understand question  │
+│ Plan analysis        │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│ 3. CODE GENERATOR    │
+│
+<truncated 19259 bytes>
+April expenses are missing.
+
+System must respond:
+
+```text
+🔴 CANNOT DETERMINE
+
+April expense data is missing.
+
+The system intentionally did not generate
+a numerical answer.
+```
+
+This refusal is a FEATURE, not an error.
+
+---
+
+# 30. DO NOT OVERENGINEER
+
+For the first implementation, DO NOT add:
+
+* Kubernetes
+* microservices
+* Redis
+* cloud deployment
+* complex vector databases
+* multi-agent swarms
+* unnecessary authentication
+* unnecessary RAG
+* unnecessary ML models
+
+First make this work perfectly:
+
+```text
+DATA
+ ↓
+INSPECT
+ ↓
+PLAN
+ ↓
+GENERATE CODE
+ ↓
+EXECUTE
+ ↓
+VERIFY
+ ↓
+PASS → ANSWER
+FAIL → REPLAN
+```
+
+That is the MVP.
+
+---
+
+# 31. FINAL REQUIREMENT
+
+After implementation, run the complete test suite.
+
+Then report:
+
+### Files created/modified
+
+### Architecture implemented
+
+### API endpoints
+
+### LLM integration
+
+### Data Inspector
+
+### Code Generator
+
+### Code Safety Validator
+
+### Docker Executor
+
+### Verifier
+
+### Replanning loop
+
+### Refusal logic
+
+### Frontend
+
+### Demo datasets
+
+### Test results
+
+For every component report:
+
+```text
+PASS
+FAIL
+PARTIAL
+NOT IMPLEMENTED
+```
+
+Do not claim a feature works unless it was actually tested.
+
+Do not hide failures.
+
+Do not silently substitute a weaker implementation for a required component.
+
+The final system must demonstrate the defining PS08 concept:
+
+> **An AI answer is not trusted merely because an LLM generated it. The answer earns trust by carrying executable proof and passing independent verification.** 
+note: bro dont empty all the tokens
+
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-10-07T11:43:40+05:30.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Claude Sonnet 4.6 (Thinking). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>
